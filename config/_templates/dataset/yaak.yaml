@@ -1,13 +1,11 @@
 #@yaml/text-templated-strings
 
 #@ drives = [
-#@     'Niro098-HQ/2024-06-18--13-39-54',
+#@     'Niro098-HQ/2024-07-26--09-15-33',
 #@ ]
 
 #@ cameras = [
 #@     'cam_front_left',
-#@     'cam_left_backward',
-#@     'cam_right_backward',
 #@ ]
 ---
 _target_: rbyte.Dataset
@@ -19,12 +17,17 @@ inputs:
     sources:
       #@ for source_id in cameras:
       (@=source_id@):
-        index_column: "meta/ImageMetadata.(@=source_id@)/frame_idx"
+        index_column: "ImageMetadata.(@=source_id@).frame_idx"
         source:
-          _target_: rbyte.io.FfmpegFrameSource
-          path: "${data_dir}/(@=input_id@)/(@=source_id@).pii.mp4"
-          resize_shorter_side: 324
-      #@ end
+          _target_: rbyte.io.PathTensorSource
+          path: "${data_dir}/(@=input_id@)/frames/(@=source_id@).defish.mp4/576x324/{:09d}.jpg"
+          decoder:
+            _target_: simplejpeg.decode_jpeg
+            _partial_: true
+            colorspace: rgb
+            fastdct: true
+            fastupsample: true
+            #@ end
 
     samples:
       pipeline:
@@ -32,44 +35,17 @@ inputs:
         validate_type_annotations: false
         cache_type: disk
         cache_kwargs:
-          cache_dir: /tmp/rbyte-cache
+          cache_dir: tmp/rbyte-cache
         functions:
           - _target_: pipefunc.PipeFunc
-            scope: meta
+            renames:
+              path: yaak_metadata_path
+              fields: yaak_metadata_fields
             output_name: data
-            cache: true
+            cache: false
             func:
               _target_: hydra.utils.get_method
               path: rbyte.io.build_yaak_metadata_dataframe
-
-          - _target_: pipefunc.PipeFunc
-            scope: mcap
-            bound:
-              path: ${data_dir}/(@=input_id@)/ai.mcap
-            output_name: data
-            func:
-              _target_: rbyte.io.McapDataFrameBuilder
-              decoder_factories: [rbyte.utils._mcap.ProtobufDecoderFactory]
-              fields:
-                /ai/safety_score:
-                  clip.end_timestamp:
-                    _target_: polars.Datetime
-                    time_unit: ns
-
-                  score:
-                    _target_: polars.Float32
-
-          - _target_: pipefunc.PipeFunc
-            func:
-              _target_: hydra.utils.get_method
-              path: rbyte.utils.make_dict
-            bound:
-              k0: meta
-              k1: mcap
-            renames:
-              v0: meta.data
-              v1: mcap.data
-            output_name: data
 
           - _target_: pipefunc.PipeFunc
             renames:
@@ -77,53 +53,83 @@ inputs:
             output_name: data_aligned
             func:
               _target_: rbyte.io.DataFrameAligner
-              separator: /
+              separator: .
               fields:
-                meta:
-                  ImageMetadata.(@=cameras[0]@):
-                    key: time_stamp
+                ImageMetadata.(@=cameras[0]@):
+                  key: time_stamp
 
-                  #@ for camera in cameras[1:]:
-                  ImageMetadata.(@=camera@):
-                    key: time_stamp
-                    columns:
-                      frame_idx:
-                        method: asof
-                        tolerance: 20ms
-                        strategy: nearest
-                  #@ end
+                #@ for camera in cameras[1:]:
+                ImageMetadata.(@=camera@):
+                  key: time_stamp
+                  columns:
+                    frame_idx:
+                      method: asof
+                      tolerance: 10ms
+                      strategy: nearest
+                #@ end
 
-                  VehicleMotion:
-                    key: time_stamp
-                    columns:
-                      speed:
-                        method: interp
-                      gear:
-                        method: asof
-                        tolerance: 100ms
-                        strategy: nearest
+                VehicleState:
+                  key: time_stamp
+                  columns:
+                    turn_signal:
+                      method: asof
+                      tolerance: 100ms
 
-                mcap:
-                  /ai/safety_score:
-                    key: clip.end_timestamp
-                    columns:
-                      clip.end_timestamp:
-                        method: asof
-                        tolerance: 500ms
-                        strategy: nearest
-                      score:
-                        method: asof
-                        tolerance: 500ms
-                        strategy: nearest
+                Gnss:
+                  key: time_stamp
+                  columns:
+                    latitude:
+                      method: interp
+                    longitude:
+                      method: interp
+                    heading:
+                      method: interp
+                    heading_error:
+                      method: interp
 
+                VehicleMotion:
+                  key: time_stamp
+                  columns:
+                    speed:
+                      method: interp
+                    gas_pedal_normalized:
+                      method: interp
+                    brake_pedal_normalized:
+                      method: interp
+                    steering_angle_normalized:
+                      method: interp
+                    gear:
+                      method: asof
+                      tolerance: 100ms
+                      strategy: nearest
           - _target_: pipefunc.PipeFunc
             renames:
               input: data_aligned
+            output_name: data_updated
+            func:
+              _target_: rbyte.io.DataFrameGnssWaypointsSampler
+              columns:
+                time_stamp: ImageMetadata.cam_front_left.time_stamp
+                latitude: Gnss.latitude
+                longitude: Gnss.longitude
+                heading_deg: Gnss.heading
+                heading_error: Gnss.heading_error
+              num_waypoints: 10
+              time_window_seconds: 60
+              radius_meters: 200
+
+          - _target_: pipefunc.PipeFunc
+            renames:
+              input: data_updated
             output_name: data_filtered
             func:
               _target_: rbyte.io.DataFrameFilter
               predicate: |
-                `meta/VehicleMotion/speed` > 44
+                `VehicleMotion.gear` == '3' 
+                and `VehicleMotion.speed` between 0.0 and 130.0 
+                and `VehicleMotion.gas_pedal_normalized` between 0.0 and 1.0 
+                and `VehicleMotion.brake_pedal_normalized` between 0.0 and 1.0 
+                and `VehicleMotion.steering_angle_normalized` between -1.0 and 1.0
 
           - _target_: pipefunc.PipeFunc
             renames:
@@ -131,44 +137,90 @@ inputs:
             output_name: samples
             func:
               _target_: rbyte.FixedWindowSampleBuilder
-              index_column: meta/ImageMetadata.(@=cameras[0]@)/frame_idx
-              every: 6i
-              period: 6i
+              index_column: ImageMetadata.(@=cameras[0]@).frame_idx
+              every: 10i
+              period: 50i
+              closed: both
+              gather_every: 10
               length: 6
 
+          - _target_: pipefunc.PipeFunc
+            renames:
+              input: samples
+            output_name: samples_filtered
+            func:
+              _target_: rbyte.io.DataFrameFilter
+              predicate: |
+                not (
+                      array_upper(`VehicleMotion.gas_pedal_normalized`) <= (1.0/255 + 0.001)
+                  and array_upper(`VehicleMotion.brake_pedal_normalized`) <= (1.0/164 + 0.001)
+                  and array_upper(`VehicleMotion.speed`) >= 25.0
+                  and array_get(`VehicleMotion.speed`, -1) - array_get(`VehicleMotion.speed`, 1) >= -0.05 * array_mean(`VehicleMotion.speed`)
+                )
+
       kwargs:
-        meta:
-          path: ${data_dir}/(@=input_id@)/metadata.log
-          fields:
-            rbyte.io.yaak.proto.sensor_pb2.ImageMetadata:
-              time_stamp:
-                _target_: polars.Datetime
-                time_unit: ns
+        yaak_metadata_path: ${data_dir}/(@=input_id@)/metadata.log
+        yaak_metadata_fields:
+          rbyte.io.yaak.proto.sensor_pb2.ImageMetadata:
+            time_stamp:
+              _target_: polars.Datetime
+              time_unit: ns
 
-              frame_idx:
-                _target_: polars.Int32
+            frame_idx:
+              _target_: polars.Int32
 
-              camera_name:
-                _target_: polars.Enum
-                categories:
-                  - cam_front_center
-                  - cam_front_left
-                  - cam_front_right
-                  - cam_left_forward
-                  - cam_right_forward
-                  - cam_left_backward
-                  - cam_right_backward
-                  - cam_rear
+            camera_name:
+              _target_: polars.Enum
+              categories:
+                - cam_front_center
+                - cam_front_left
+                - cam_front_right
+                - cam_left_forward
+                - cam_right_forward
+                - cam_left_backward
+                - cam_right_backward
+                - cam_rear
 
-            rbyte.io.yaak.proto.can_pb2.VehicleMotion:
-              time_stamp:
-                _target_: polars.Datetime
-                time_unit: ns
+          rbyte.io.yaak.proto.can_pb2.VehicleState:
+            time_stamp:
+              _target_: polars.Datetime
+              time_unit: ns
 
-              speed:
-                _target_: polars.Float32
+            turn_signal:
+              _target_: polars.Int8
 
-              gear:
-                _target_: polars.Enum
-                categories: ["0", "1", "2", "3"]
+          rbyte.io.yaak.proto.can_pb2.VehicleMotion:
+            time_stamp:
+              _target_: polars.Datetime
+              time_unit: ns
+
+            speed:
+              _target_: polars.Float32
+
+            gas_pedal_normalized:
+              _target_: polars.Float32
+
+            brake_pedal_normalized:
+              _target_: polars.Float32
+
+            steering_angle_normalized:
+              _target_: polars.Float32
+
+            gear:
+              _target_: polars.Enum
+              categories: ["0", "1", "2", "3"]
+
+          rbyte.io.yaak.proto.sensor_pb2.Gnss:
+            time_stamp:
+              _target_: polars.Datetime
+              time_unit: ns
+            latitude:
+              _target_: polars.Float32
+            longitude:
+              _target_: polars.Float32
+            heading:
+              _target_: polars.Float32
+            heading_error:
+              _target_: polars.Float32
+
   #@ end
