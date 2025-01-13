@@ -92,55 +92,36 @@ class DataFrameGnssWaypointsSampler:
             .drop("sampled_points", "rolling_lat", "rolling_lon")
         )
 
-        # smooth_headings
-        logger.debug("smoothing headings")
-        df = (
-            df.with_columns(
-                np.radians(pl.col(self.columns["heading_deg"])).alias("heading")
-            )
-            .with_columns(  # smoothing
-                np.sin(pl.col("heading"))
-                .rolling_mean(self.heading_smoothing_window, center=True)
-                .fill_null(np.sin(pl.col("heading")))
-                .alias("heading_sin_smoothed"),
-                np.cos(pl.col("heading"))
-                .rolling_mean(self.heading_smoothing_window, center=True)
-                .fill_null(np.cos(pl.col("heading")))
-                .alias("heading_cos_smoothed"),
-            )
-            .with_columns(
-                pl.arctan2(
-                    pl.col("heading_sin_smoothed"), pl.col("heading_cos_smoothed")
-                ).alias("heading")
-            )
-            .with_columns(
-                pl.when(
-                    pl.col(self.columns["heading_error"])
-                    < np.radians(self.heading_error_thr_deg)
-                )
-                .then(pl.col("heading"))
-                .otherwise(None)
-                .fill_null(
-                    strategy="forward"
-                )  # Forward fill to get the last valid value
-                .alias("heading_smoothed")
-            )
-            .drop("heading_sin_smoothed", "heading_cos_smoothed", "heading")
+        heading_col = "Waypoints.heading_rad"
+        df = self.heading_from_waypoints(
+            df, x_col=lon_col, y_col=lat_col, out_col=heading_col
         )
+
+        # df = self.build_heading_triangle(
+        #     df,
+        #     l=self._approximate_radius_deg(20),
+        #     ego_lat_col=lat_col,
+        #     ego_lon_col=lon_col,
+        #     heading_col=heading_col
+        # )
+
+        # center waypoints
+        # QUESTION: should we center to smoothed?
         df = df.with_columns(
             (pl.col("waypoints_latitude") - pl.col(lat_col)).alias("delta_lat"),
             (pl.col("waypoints_longitude") - pl.col(lon_col)).alias("delta_lon"),
         )
+
         # rotate to always point north
         logger.debug("rotating to always point north")
         df = df.with_columns(
             (
-                pl.col("delta_lon") * pl.col("heading_smoothed").cos()
-                + pl.col("delta_lat") * pl.col("heading_smoothed").sin().neg()
+                pl.col("delta_lon") * pl.col(heading_col).cos()
+                + pl.col("delta_lat") * pl.col(heading_col).sin().neg()
             ).alias("delta_lon_shifted"),
             (
-                pl.col("delta_lat") * pl.col("heading_smoothed").sin()
-                + pl.col("delta_lon") * pl.col("heading_smoothed").cos()
+                pl.col("delta_lat") * pl.col(heading_col).sin()
+                + pl.col("delta_lon") * pl.col(heading_col).cos()
             ).alias("delta_lat_shifted"),
         ).drop("delta_lat", "delta_lon")
 
@@ -174,7 +155,7 @@ class DataFrameGnssWaypointsSampler:
                     )
                 )
             )
-            .alias("Gnss.waypoints_lat_lon")
+            .alias("Waypoints.lat_lon")
         ).drop("waypoints_latitude", "waypoints_longitude")
 
         logger.debug("converting ego lat lon to list of tuples")
@@ -185,7 +166,7 @@ class DataFrameGnssWaypointsSampler:
         ).drop("Gnss.latitude", "Gnss.longitude")
 
         logger.debug("waypoints sampled")
-        return df.rename({"heading_smoothed": "Waypoints.heading_rad"})
+        return df
 
     def sample_equidistant_points(self, row: list[list[float]]) -> np.ndarray:
         """
@@ -215,6 +196,127 @@ class DataFrameGnssWaypointsSampler:
             np.interp(sample_distances, cumulative_distances, points[:, 0]),
             np.interp(sample_distances, cumulative_distances, points[:, 1]),
         )).flatten(order="F")
+
+    @staticmethod
+    def heading_from_waypoints(
+        df: pl.DataFrame,
+        x_col: str = "Gnss.longitude",
+        y_col: str = "Gnss.latitude",
+        out_col: str = "heading_waypoints_rad",
+        threshold: float = 0,
+        window_size: int = 30,
+    ) -> pl.DataFrame:
+        """
+        Calculate heading from waypoints by denosing x, y and then calculating angle betweeen next distinct points.
+
+        Parameters:
+        df (pl.DataFrame): Input dataframe.
+        x_col (str): Name of the column with longitude.
+        y_col (str): Name of the column with latitude.
+        out_col (str): Name of the output column with heading.
+        threshold (float): Threshold for denoising.
+        window_size (int): Window size for denoising.
+
+        Returns:
+        pl.DataFrame: Dataframe with heading.
+        """
+        assert x_col in df.columns and y_col in df.columns, (
+            f"Columns `{x_col}` and `{y_col}` not found in dataframe columns: {df.columns}"
+        )
+
+        # denoise x, y
+        df = df.with_columns(
+            pl.col(x_col)
+            .rolling_mean(window_size=window_size, center=True)
+            .fill_null(strategy="forward")
+            .fill_null(strategy="backward")
+            .alias(f"{x_col}_ma"),
+            pl.col(y_col)
+            .rolling_mean(window_size=window_size, center=True)
+            .fill_null(strategy="forward")
+            .fill_null(strategy="backward")
+            .alias(f"{y_col}_ma"),
+        )
+
+        # angle by next distinct
+        df = (
+            df.with_columns(
+                pl.col(f"{x_col}_ma").diff().alias("x_diff").shift(-1),
+                pl.col(f"{y_col}_ma").diff().alias("y_diff").shift(-1),
+            )
+            .with_columns(
+                pl.when(
+                    (pl.col("x_diff").abs() <= threshold)
+                    & (pl.col("y_diff").abs() <= threshold)
+                )
+                .then(None)
+                .otherwise(pl.concat_list(["x_diff", "y_diff"]).list.to_array(width=2))
+                .fill_null(strategy="backward")
+                .alias("xy_diff")
+            )
+            .drop("x_diff", "y_diff")
+        )
+
+        # denoise
+        df = (
+            df.with_columns(
+                pl.col("xy_diff")
+                .arr.get(0)
+                .rolling_mean(window_size=window_size, center=True)
+                .fill_null(strategy="forward")
+                .fill_null(strategy="backward")
+                .alias("x_diff_ma"),
+                pl.col("xy_diff")
+                .arr.get(1)
+                .rolling_mean(window_size=window_size, center=True)
+                .fill_null(strategy="forward")
+                .fill_null(strategy="backward")
+                .alias("y_diff_ma"),
+            )
+            .with_columns(
+                pl.arctan2(y=pl.col("y_diff_ma"), x=pl.col("x_diff_ma")).alias(out_col)
+            )
+            .drop("x_diff_ma", "y_diff_ma", "xy_diff")
+        )
+
+        return df
+
+    @staticmethod
+    def build_heading_triangle(
+        df: pl.DataFrame, l: float, ego_lat_col: str, ego_lon_col: str, heading_col: str
+    ) -> pl.DataFrame:
+        """
+        Build a triangle of points from the ego position and heading.
+        """
+        a_expr = [
+            pl.col(ego_lat_col) + l * pl.col(heading_col).cos(),
+            pl.col(ego_lon_col) + l * pl.col(heading_col).sin(),
+        ]
+
+        b_expr = [
+            pl.col(ego_lat_col) - (l / 4) * pl.col(heading_col).sin(),
+            pl.col(ego_lon_col) + (l / 4) * pl.col(heading_col).cos(),
+        ]
+
+        c_expr = [
+            pl.col(ego_lat_col) + (l / 4) * pl.col(heading_col).sin(),
+            pl.col(ego_lon_col) - (l / 4) * pl.col(heading_col).cos(),
+        ]
+
+        d_expr = [pl.col(ego_lat_col), pl.col(ego_lon_col)]
+
+        return df.with_columns(
+            pl.concat_list(
+                a_expr[0],
+                a_expr[1],
+                b_expr[0],
+                b_expr[1],
+                c_expr[0],
+                c_expr[1],
+                d_expr[0],
+                d_expr[1],
+            ).alias("Heading.triangle")
+        )
 
     @staticmethod
     def _approximate_radius_deg(meters: float) -> float:
