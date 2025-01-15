@@ -96,14 +96,15 @@ class DataFrameGnssWaypointsSampler:
         df = self.heading_from_waypoints(
             df, x_col=lon_col, y_col=lat_col, out_col=heading_col
         )
+        df = df.with_columns((np.pi / 2 - pl.col(heading_col)).alias(heading_col))
 
-        # df = self.build_heading_triangle(
-        #     df,
-        #     l=self._approximate_radius_deg(20),
-        #     ego_lat_col=lat_col,
-        #     ego_lon_col=lon_col,
-        #     heading_col=heading_col
-        # )
+        df = self.build_heading_triangle(
+            df,
+            l=self._approximate_radius_deg(20),
+            ego_lat_col=lat_col,
+            ego_lon_col=lon_col,
+            heading_col=heading_col,
+        )
 
         # center waypoints
         # QUESTION: should we center to smoothed?
@@ -159,11 +160,11 @@ class DataFrameGnssWaypointsSampler:
         ).drop("waypoints_latitude", "waypoints_longitude")
 
         logger.debug("converting ego lat lon to list of tuples")
-        df = df.with_columns(
-            pl.concat_list(["Gnss.latitude", "Gnss.longitude"]).alias(
-                "Gnss.ego_lat_lon"
-            )
-        ).drop("Gnss.latitude", "Gnss.longitude")
+        # df = df.with_columns(
+        #     pl.concat_list(["Gnss.latitude", "Gnss.longitude"]).alias(
+        #         "Gnss.ego_lat_lon"
+        #     )
+        # ).drop("Gnss.latitude", "Gnss.longitude")
 
         logger.debug("waypoints sampled")
         return df
@@ -315,7 +316,7 @@ class DataFrameGnssWaypointsSampler:
                 c_expr[1],
                 d_expr[0],
                 d_expr[1],
-            ).alias("Heading.triangle")
+            ).alias("Waypoints.heading_triangle")
         )
 
     @staticmethod
