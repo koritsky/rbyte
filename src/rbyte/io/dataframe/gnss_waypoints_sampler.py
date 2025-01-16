@@ -37,7 +37,25 @@ class DataFrameGnssWaypointsSampler:
         ts_col: str = self.columns["time_stamp"]
         lat_col: str = self.columns["latitude"]
         lon_col: str = self.columns["longitude"]
-        input[0, self.columns["heading_error"]] = 0
+
+        df = input
+        window_size = 30
+
+        # smooth gnss
+        # WARN: rewriting orig gnss column
+        df = df.with_columns(
+            pl.col(lat_col)
+            .rolling_mean(window_size=window_size, center=True)
+            .fill_null(strategy="forward")
+            .fill_null(strategy="backward")
+            .alias(lat_col),
+            pl.col(lon_col)
+            .rolling_mean(window_size=window_size, center=True)
+            .fill_null(strategy="forward")
+            .fill_null(strategy="backward")
+            .alias(lon_col),
+        )
+
         # find waypoints in time_window_seconds radius
         logger.debug("finding waypoints in time_window_seconds radius")
         df = (
@@ -84,10 +102,10 @@ class DataFrameGnssWaypointsSampler:
             .with_columns([
                 pl.col("sampled_points")
                 .list.slice(0, self.num_waypoints)
-                .alias("waypoints_longitude"),
+                .alias("wpts_lon"),
                 pl.col("sampled_points")
                 .list.slice(self.num_waypoints, self.num_waypoints)
-                .alias("waypoints_latitude"),
+                .alias("wpts_lat"),
             ])
             .drop("sampled_points", "rolling_lat", "rolling_lon")
         )
@@ -95,8 +113,7 @@ class DataFrameGnssWaypointsSampler:
         heading_col = "Waypoints.heading_rad"
         df = self.heading_from_waypoints(
             df, x_col=lon_col, y_col=lat_col, out_col=heading_col
-        )
-        df = df.with_columns((np.pi / 2 - pl.col(heading_col)).alias(heading_col))
+        ).with_columns((np.pi / 2 - pl.col(heading_col)).alias(heading_col))
 
         df = self.build_heading_triangle(
             df,
@@ -106,65 +123,52 @@ class DataFrameGnssWaypointsSampler:
             heading_col=heading_col,
         )
 
-        # center waypoints
-        # QUESTION: should we center to smoothed?
-        df = df.with_columns(
-            (pl.col("waypoints_latitude") - pl.col(lat_col)).alias("delta_lat"),
-            (pl.col("waypoints_longitude") - pl.col(lon_col)).alias("delta_lon"),
+        # center and rotate
+        logger.debug("center and rotate wpts")
+        df = (
+            df.with_columns(  # center
+                (pl.col("wpts_lat") - pl.col(lat_col)).alias("wpts_lat_centered"),
+                (pl.col("wpts_lon") - pl.col(lon_col)).alias("wpts_lon_centered"),
+            )
+            .with_columns(  # rotate
+                (
+                    pl.col("wpts_lon_centered") * pl.col(heading_col).cos()
+                    + pl.col("wpts_lat_centered") * pl.col(heading_col).sin().neg()
+                ).alias("wpts_lon_centered_rotated"),
+                (
+                    pl.col("wpts_lon_centered") * pl.col(heading_col).sin()
+                    + pl.col("wpts_lat_centered") * pl.col(heading_col).cos()
+                ).alias("wpts_lat_centered_rotated"),
+            )
+            .drop("wpts_lat_centered", "wpts_lon_centered")
         )
-
-        # rotate to always point north
-        logger.debug("rotating to always point north")
-        df = df.with_columns(
-            (
-                pl.col("delta_lon") * pl.col(heading_col).cos()
-                + pl.col("delta_lat") * pl.col(heading_col).sin().neg()
-            ).alias("delta_lon_shifted"),
-            (
-                pl.col("delta_lat") * pl.col(heading_col).sin()
-                + pl.col("delta_lon") * pl.col(heading_col).cos()
-            ).alias("delta_lat_shifted"),
-        ).drop("delta_lat", "delta_lon")
 
         logger.debug("converting deltas to list of tuples")
         df = df.with_columns(
-            pl.struct(["delta_lon_shifted", "delta_lat_shifted"])
+            pl.struct(["wpts_lon_centered_rotated", "wpts_lat_centered_rotated"])
             .map_elements(
                 lambda row: list(
                     map(
                         list,
                         zip(
-                            row["delta_lon_shifted"],
-                            row["delta_lat_shifted"],
+                            row["wpts_lon_centered_rotated"],
+                            row["wpts_lat_centered_rotated"],
                             strict=False,
                         ),
                     )
                 )
             )
-            .alias("Waypoints.delta")
-        ).drop("delta_lat_shifted", "delta_lon_shifted")
+            .alias("Waypoints.lon_lat_normalized")
+        ).drop("wpts_lat_centered_rotated", "wpts_lon_centered_rotated")
 
         logger.debug("converting waypoints to list of tuples")
         df = df.with_columns(
-            pl.struct(["waypoints_latitude", "waypoints_longitude"])
+            pl.struct(["wpts_lat", "wpts_lon"])
             .map_elements(
-                lambda row: list(
-                    zip(
-                        row["waypoints_latitude"],
-                        row["waypoints_longitude"],
-                        strict=False,
-                    )
-                )
+                lambda row: list(zip(row["wpts_lat"], row["wpts_lon"], strict=False))
             )
             .alias("Waypoints.lat_lon")
-        ).drop("waypoints_latitude", "waypoints_longitude")
-
-        logger.debug("converting ego lat lon to list of tuples")
-        # df = df.with_columns(
-        #     pl.concat_list(["Gnss.latitude", "Gnss.longitude"]).alias(
-        #         "Gnss.ego_lat_lon"
-        #     )
-        # ).drop("Gnss.latitude", "Gnss.longitude")
+        ).drop("wpts_lat", "wpts_lon")
 
         logger.debug("waypoints sampled")
         return df
@@ -225,25 +229,11 @@ class DataFrameGnssWaypointsSampler:
             f"Columns `{x_col}` and `{y_col}` not found in dataframe columns: {df.columns}"
         )
 
-        # denoise x, y
-        df = df.with_columns(
-            pl.col(x_col)
-            .rolling_mean(window_size=window_size, center=True)
-            .fill_null(strategy="forward")
-            .fill_null(strategy="backward")
-            .alias(f"{x_col}_ma"),
-            pl.col(y_col)
-            .rolling_mean(window_size=window_size, center=True)
-            .fill_null(strategy="forward")
-            .fill_null(strategy="backward")
-            .alias(f"{y_col}_ma"),
-        )
-
         # angle by next distinct
         df = (
             df.with_columns(
-                pl.col(f"{x_col}_ma").diff().alias("x_diff").shift(-1),
-                pl.col(f"{y_col}_ma").diff().alias("y_diff").shift(-1),
+                pl.col(x_col).diff().alias("x_diff").shift(-1),
+                pl.col(y_col).diff().alias("y_diff").shift(-1),
             )
             .with_columns(
                 pl.when(
