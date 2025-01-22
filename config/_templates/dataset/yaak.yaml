@@ -1,7 +1,7 @@
 #@yaml/text-templated-strings
 
 #@ drives = [
-#@     'Niro098-HQ/2024-07-26--09-15-33',
+#@     'Niro098-HQ/2024-06-18--13-39-54',
 #@ ]
 
 #@ cameras = [
@@ -102,22 +102,30 @@ inputs:
                       method: asof
                       tolerance: 100ms
                       strategy: nearest
+          # - _target_: pipefunc.PipeFunc
+          #   renames:
+          #     input: data_aligned
+          #   output_name: data_updated
+          #   func:
+          #     _target_: rbyte.io.DataFrameHarsiWaypointsSampler
+          #     columns:
+          #       time_stamp: ImageMetadata.cam_front_left.time_stamp
+          #       latitude: Gnss.latitude
+          #       longitude: Gnss.longitude
+          #       heading_deg: Gnss.heading
+          #       heading_error: Gnss.heading_error
+          #     num_waypoints: 10
+          #     time_window_seconds: 60
+          #     radius_meters: 200
+
           - _target_: pipefunc.PipeFunc
             renames:
               input: data_aligned
             output_name: data_updated
             func:
-              _target_: rbyte.io.DataFrameGnssWaypointsSampler
-              columns:
-                time_stamp: ImageMetadata.cam_front_left.time_stamp
-                latitude: Gnss.latitude
-                longitude: Gnss.longitude
-                heading_deg: Gnss.heading
-                heading_error: Gnss.heading_error
-              num_waypoints: 10
-              time_window_seconds: 60
-              radius_meters: 200
-
+              _target_: rbyte.io.dataframe.waypoints_merger.DataFrameWaypointsMerger
+              waypoints_path: ${data_dir}/(@=input_id@)/waypoints.json
+              timestamp_column: ImageMetadata.(@=cameras[0]@).time_stamp
           - _target_: pipefunc.PipeFunc
             renames:
               input: data_updated
