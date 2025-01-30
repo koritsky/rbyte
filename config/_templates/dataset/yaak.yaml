@@ -98,21 +98,6 @@ inputs:
                       method: asof
                       tolerance: 100ms
                       strategy: nearest
-          # - _target_: pipefunc.PipeFunc
-          #   renames:
-          #     input: data_aligned
-          #   output_name: data_updated
-          #   func:
-          #     _target_: rbyte.io.DataFrameHarsiWaypointsSampler
-          #     columns:
-          #       time_stamp: ImageMetadata.cam_front_left.time_stamp
-          #       latitude: Gnss.latitude
-          #       longitude: Gnss.longitude
-          #       heading_deg: Gnss.heading
-          #       heading_error: Gnss.heading_error
-          #     num_waypoints: 10
-          #     time_window_seconds: 60
-          #     radius_meters: 200
 
           - _target_: pipefunc.PipeFunc
             renames:

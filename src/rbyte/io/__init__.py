@@ -6,7 +6,6 @@ from .dataframe import (
     DataFrameFilter,
     DataFrameFpsResampler,
     DataFrameGnssWaypointsSampler,
-    DataFrameHarsiWaypointsSampler,
     DataFrameIndexer,
     DataFrameWaypointsMerger,
 )
@@ -18,7 +17,6 @@ __all__: list[str] = [
     "DataFrameFilter",
     "DataFrameFpsResampler",
     "DataFrameGnssWaypointsSampler",
-    "DataFrameHarsiWaypointsSampler",
     "DataFrameIndexer",
     "DataFrameWaypointsMerger",
     "JsonDataFrameBuilder",

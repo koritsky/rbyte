@@ -93,6 +93,8 @@ inputs:
                   control.steer:
                   state.velocity.value:
                   state.acceleration.value:
+                  state.transform.x:
+                  state.transform.y:
 
           - _target_: pipefunc.PipeFunc
             renames:
@@ -127,4 +129,18 @@ inputs:
               _target_: rbyte.io.DataFrameFilter
               predicate: |
                 `control.throttle` > 0.5
+          - _target_: pipefunc.PipeFunc
+            renames:
+              input: data_filtered
+            output_name: data_merged
+            func:
+              _target_: rbyte.io.dataframe.waypoints_merger.DataFrameWaypointsMerger
+              waypoints_path: ${data_dir}/(@=input_id@)/waypoints.json
+              coordinates_type: xy
+              ego_lon_x_col: state.transform.x
+              ego_lat_y_col: state.transform.y
+              timestamp_col: _idx_
+              num_waypoints: 10
+              out_col: Waypoints.xy
+              predict_mode: true
   #@ end
