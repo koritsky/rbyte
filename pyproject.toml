@@ -21,6 +21,11 @@ dependencies = [
   "tqdm>=4.66.5",
   "pipefunc>=0.41.0",
   "scipy>=1.15.0",
+  "geopy>=2.4.1",
+  "geopolars>=0.1.0a4",
+  "shapely>=2.0.6",
+  "geopandas>=1.0.1",
+  "geojson>=3.2.0",
 ]
 readme = "README.md"
 requires-python = ">=3.12,<3.13"

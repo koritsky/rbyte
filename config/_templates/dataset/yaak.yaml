@@ -82,10 +82,6 @@ inputs:
                       method: interp
                     longitude:
                       method: interp
-                    heading:
-                      method: interp
-                    heading_error:
-                      method: interp
 
                 VehicleMotion:
                   key: time_stamp
@@ -125,7 +121,13 @@ inputs:
             func:
               _target_: rbyte.io.dataframe.waypoints_merger.DataFrameWaypointsMerger
               waypoints_path: ${data_dir}/(@=input_id@)/waypoints.json
-              timestamp_column: ImageMetadata.(@=cameras[0]@).time_stamp
+              coordinates_type: lat_lon
+              ego_lon_x_col: Gnss.longitude
+              ego_lat_y_col: Gnss.latitude
+              timestamp_col: ImageMetadata.(@=cameras[0]@).time_stamp
+              num_waypoints: 10
+              out_col: Waypoints.xy
+              predict_mode: true
           - _target_: pipefunc.PipeFunc
             renames:
               input: data_updated
@@ -225,10 +227,6 @@ inputs:
             latitude:
               _target_: polars.Float32
             longitude:
-              _target_: polars.Float32
-            heading:
-              _target_: polars.Float32
-            heading_error:
               _target_: polars.Float32
 
   #@ end
