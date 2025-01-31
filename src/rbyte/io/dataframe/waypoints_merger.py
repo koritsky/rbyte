@@ -256,7 +256,7 @@ class DataFrameWaypointsMerger:
                 c_expr[1],
                 d_expr[0],
                 d_expr[1],
-            ).alias("Waypoints.gnss.heading_triangle")
+            ).alias("Waypoints.mapview.heading_triangle")
         )
 
     @staticmethod

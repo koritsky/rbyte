@@ -42,7 +42,8 @@ class FixedWindowSampleBuilder:
 
     def __call__(self, input: pl.DataFrame) -> pl.DataFrame:
         return (
-            input.sort(self._index_column)
+            input.with_columns(self._index_column.cast(pl.Int32))
+            .sort(self._index_column)
             .with_columns(self._index_column.alias(_index_column := uuid4().hex))
             .group_by_dynamic(
                 index_column=_index_column,
