@@ -32,7 +32,8 @@ class DataFrameWaypointsMerger:
         timestamp_col: str,
         num_waypoints: int = 10,
         out_col: str = "Waypoints.xy",
-        predict_mode: bool = False,
+        predict_mode: bool = False,        
+        relative_to_wpts: bool = False,
     ) -> None:
         """
         We assume that wpts and ego coordinates are in the same CRS.
@@ -88,6 +89,13 @@ class DataFrameWaypointsMerger:
         )
 
         logger.debug("Centering and rotating waypoints dataframe")
+        if self.relative_to_wpts:
+            df = df.with_columns(
+                pl.col('Waypoints.lat').explode().gather_every(10).alias('Waypoints.lat.0'),
+                pl.col('Waypoints.lon').explode().gather_every(10).alias('Waypoints.lon.0'),
+            )
+            self.ego_lon_x_col = 'Waypoints.lon.0'
+            self.ego_lat_y_col = 'Waypoints.lat.0'
         df = self._center_and_rotate(df, out_col=self.out_col)
 
         if self.predict_mode:
