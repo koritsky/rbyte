@@ -1,0 +1,77 @@
+#@yaml/text-templated-strings
+
+#@ drives = [
+#@     'Accident/Town12_Rep0_10_0_route0_11_08_23_53_07',
+#@ ]
+
+#@ cameras = [
+#@     'rgb',
+#@ ]
+---
+_target_: rbyte.Dataset
+_recursive_: false
+_convert_: all
+inputs:
+  #@ for input_id in drives:
+  (@=input_id@):
+    sources:
+      #@ for source_id in cameras:
+      (@=source_id@):
+        index_column: _idx_
+        source:
+          _target_: rbyte.io.PathTensorSource
+          path: "${data_dir}/(@=input_id@)/(@=source_id@)/{:04d}.jpg"
+          decoder:
+            _target_: simplejpeg.decode_jpeg
+            _partial_: true
+            colorspace: rgb
+            fastdct: true
+            fastupsample: true
+
+      #@ end
+
+    samples:
+      pipeline:
+        _target_: pipefunc.Pipeline
+        validate_type_annotations: false
+        functions:
+          - _target_: pipefunc.PipeFunc
+            bound:
+              path: ${data_dir}/(@=input_id@)/measurements.json
+            output_name: logs
+            func:
+              _target_: rbyte.io.JsonDataFrameBuilder
+              fields:
+                records:
+                  speed: 
+                  steer:
+                  throttle:
+                  brake:
+                  pos_global:
+
+          - _target_: pipefunc.PipeFunc
+            renames:
+              input: logs
+            output_name: data
+            func:
+              _target_: rbyte.io.DataFrameConcater
+              method: vertical
+
+                  
+          - _target_: pipefunc.PipeFunc
+            renames:
+              input: data
+            output_name: data_indexed
+            func:
+              _target_: rbyte.io.DataFrameIndexer
+              name: _idx_
+
+          - _target_: pipefunc.PipeFunc
+            renames:
+              input: data_indexed
+            output_name: data_filtered
+            func:
+              _target_: rbyte.io.DataFrameFilter
+              predicate: |
+                `throttle` > 0.5
+  #@ end
