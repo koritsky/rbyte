@@ -2,6 +2,7 @@ from ._json import JsonDataFrameBuilder
 from ._numpy import NumpyTensorSource
 from .dataframe import (
     DataFrameAligner,
+    DataFrameColumnSplitter,
     DataFrameConcater,
     DataFrameFilter,
     DataFrameFpsResampler,
@@ -13,6 +14,7 @@ from .path import PathDataFrameBuilder, PathTensorSource
 
 __all__: list[str] = [
     "DataFrameAligner",
+    "DataFrameColumnSplitter",
     "DataFrameConcater",
     "DataFrameFilter",
     "DataFrameFpsResampler",

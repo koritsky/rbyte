@@ -38,23 +38,22 @@ class DataFrameGnssWaypointsSampler:
         lat_col: str = self.columns["latitude"]
         lon_col: str = self.columns["longitude"]
 
-        df = input
         window_size = 30
 
         # smooth gnss
         # WARN: rewriting orig gnss column
-        df = df.with_columns(
-            pl.col(lat_col)
-            .rolling_mean(window_size=window_size, center=True)
-            .fill_null(strategy="forward")
-            .fill_null(strategy="backward")
-            .alias(lat_col),
-            pl.col(lon_col)
-            .rolling_mean(window_size=window_size, center=True)
-            .fill_null(strategy="forward")
-            .fill_null(strategy="backward")
-            .alias(lon_col),
-        )
+        # input = input.with_columns(
+        #     pl.col(lat_col)
+        #     .rolling_mean(window_size=window_size, center=True)
+        #     .fill_null(strategy="forward")
+        #     .fill_null(strategy="backward")
+        #     .alias(lat_col),
+        #     pl.col(lon_col)
+        #     .rolling_mean(window_size=window_size, center=True)
+        #     .fill_null(strategy="forward")
+        #     .fill_null(strategy="backward")
+        #     .alias(lon_col),
+        # )
 
         # find waypoints in time_window_seconds radius
         logger.debug("finding waypoints in time_window_seconds radius")

@@ -85,6 +85,10 @@ visualize-nuscenes-rrd:
 visualize-carla:
     just visualize dataset=carla logger=rerun/carla ++data_dir=/nasa/drives/carla
 
+[group('visualize')]
+visualize-carla-garage:
+    just visualize dataset=carla_garage logger=rerun/carla ++data_dir=/nasa/drives/carla_garage
+
 # rerun server and viewer
 rerun bind="0.0.0.0" port="9876" ws-server-port="9877" web-viewer-port="9090":
     RUST_LOG=debug uv run rerun \
